@@ -35,19 +35,32 @@ if (!dir.exists("data")) dir.create("data")
 if (!dir.exists("data/raw")) dir.create("data/raw")
 
 
-# Read only some sample events
+# Read events: Only some sample events
 #events <- read.csv("data/raw/events_sample.csv")
 
 
-## Read all events but work with a sample set
+## Read events: All but work with a sample subset
 #events_origin <- read.csv("data/raw/events.csv")
 #events <-  dplyr::sample_frac(events_origin, 0.001)
 
 
-## Definitive approach with all the events
+## Read events: All available events
 events <- read.csv("data/raw/events.csv")
 
+## Read features: All available
 features <- read.csv("data/raw/features.csv")
+
+```
+
+
+```{r elegant_frames, echo=FALSE}
+# Prepare dataframe
+events$protocol_grouped <- events$proto
+events$protocol_grouped[!(events$protocol_grouped == "tcp" | events$protocol_grouped == "udp" )]  <- "others"
+
+levels(events$service) <- c(levels(events$service), "invalid") 
+events$service[is.na(events$service)] <- "invalid"
+
 ```
 
 ### Events analysis
@@ -65,22 +78,32 @@ Por otro lado, al hacer una exploración visual, no detectamos muchos campos con
 Se detectan dos particularidades principales, por un lado el campo "service" presenta un elevado número de NAs (mas del 50%), lo que nos recomienda no trabajar con él.
 
 ```{r events_stats_service, echo=FALSE}
-levels(events$service) <- c(levels(events$service), "invalid") 
-events$service[is.na(events$service)] <- "invalid"
-prop.table(table(events$service))
+
+df = cbind(as.data.frame(table(events$service), names(table(events$service))))
+ggplot(df) +
+  aes(x = Var1, weight = Freq, fill = names(table(events$service))) +
+  geom_bar() +
+  labs(x = "Service", y = "Occurrencies") +
+  scale_fill_manual("legend", values = c("dhcp" = "#3CAE3F",
+  "dns" = "#3CAE3F",
+  "ftp" = "#3CAE3F",
+  "ftp-data" = "#3CAE3F",
+  "http" = "#3CAE3F",
+  "invalid" = "red",
+  "irc" = "#3CAE3F",
+  "pop3" = "#3CAE3F",
+  "radius" = "#3CAE3F",
+  "smtp" = "#3CAE3F",
+  "snmp" = "#3CAE3F",
+  "ssh" = "#3CAE3F",
+  "ssl" = "#3CAE3F"))
 
 ```
 
 Por otro lado, la diferencia, normal, cuando estamos trabajando con eventos de distintos protocolos. Debido a las significativas diferencias entre los distintos protocolos, seria interesante estudiarlos por separado si quisieramos tener insights con mucho mas detalle. Se hace este apunte para remarcar que las informaciones  pueden diferir mucho entre unos y otros.
 Especialmente entre el grupo TCP y UDP y los demás, De todas formas, asumiendo que un 98% del tráfico es TCP+UDP, trabajaremos con todo el dataset.
 ```{r events_stats_protocol, echo=FALSE}
-
-ggplot(as.data.frame(events$proto)) +
-  aes(x = data) +
-  geom_bar(position = "dodge", fill = "#228B22") +
-  labs(title = "Events by protocol") +
-  theme_minimal()
-
+pie(table(events$protocol_grouped))
 ```
 
 ### Datos "a no tener en cuenta"
@@ -110,8 +133,9 @@ Para decidir si es un dato imprescindible o no, será interesante trabajar tanto
 ![ctstatettl accuracy](./images/ctstatettl.png)
 
 ### Data enrichment
+
 Al realizar los distintos entrenados del modelo hemos detectado un éxito alto, por lo que no ha sido necesario añadir datos de otras fuentes.
-Sin embargo hay algunos datos externos con los que seria interesante trabajar para sacar conclusiones que puedan ayudar incluso mas al análisis. Por ejemplo determinar si geográficamente hay alguna relación entre las IPs orígenes que nos estan realizando los ataques, o si hay relación en cuanto al propietario. O incluso analizar versiones de SOs, frameworks, servidores... para determinar si algunos son mas suceptibles de ataque que otros, para definir acciones de mitigación incluso antes de qué los ataques sucedan.
+Sin embargo hay algunos datos externos con los que seria interesante trabajar para sacar conclusiones que puedan ayudar incluso mas al análisis. Por ejemplo determinar si geográficamente hay alguna relación entre las IPs orígenes que nos estan realizando los ataques, o si hay relación en cuanto al propietario.
 
 ## Feature engineering
 
@@ -136,12 +160,18 @@ events <- as.data.frame(unclass(events), stringsAsFactors = TRUE)
 
 outcomeName <- 'Label'
 
-excludedCols <- c("Label","attackcat", "ctstatettl", "srcip", "dstip")
-predictorsNames <- subset(names(events), !(names(events) %in% excludedCols))
+# Aproximación inicial excluyendo solo algunos campos
+#excludedCols <- c("Label","attackcat", "ctstatettl", "srcip", "dstip")
+#predictorsNames <- subset(names(events), !(names(events) %in% excludedCols))
 
-selectedCols <- c("smeansz", "sbytes", "ackdat", "proto")
+# Aproximación posterior incluyendo gran cantidad de elementos
+#selectedCols <- c("sttl","smeansz", "sbytes", "ackdat", "synack", "proto")
+#predictorsNames <- subset(names(events), (names(events) %in% selectedCols))
+
+
+# Aproximación final con los dos elementos que mas precisión aportan
+selectedCols <- c("sttl","smeansz")
 predictorsNames <- subset(names(events), (names(events) %in% selectedCols))
-
 
 prop.table(table(events$Label))
 ```
@@ -213,15 +243,8 @@ plot(varImp(objModel,scale=F))
 ## Conclusion
 
 Podemos concluir que el dataset nos permite hacer predicciones muy precisas, con ciertamente pocos datos.
-El campo "ctstatettl" nos da una precisión altísima, pero por desconocimiento del cálculo (y de la fiabilidad del mismo) para generar este dato, se ha optado por utilizar otros campos que tambien otorgan una fiabilidad muy alta.
+El campo "ctstatettl" nos da una precisión altísima, pero por desconocimiento del cálculo (y de la fiabilidad del mismo) para generar este dato, se ha optado por utilizar otros 2 campos que tambien otorgan una fiabilidad muy alta. ("sttl" y "smeansz"). Con esto concluimos que sabiendo la media del tamaño de paquetes enviados y el tiempo de vida de las conexiones "orígen - destino" podemos identificar con una alta precisión si se trata de un ataque o no.
 
-Por lo tanto, podemos concluir que, con relativamente pocos datos somos capaces de determinar si ciertas conexiones forman parte de un ataque o no.
+Como hemos comentado en puntos anteriores, seria interesante hacer enrichment de los datos, para poder detectar incluso con mas celeridad cualquier ataque (orígenes geográficos, o de propiedad) por ejemplo.
 
-Como hemos comentado en puntos anteriores, seria interesante hacer enrichment de los datos, para poder detectar incluso con mas celeridad cualquier ataque, qué destinos se han estado atacando (identificando OSs, servicios expuestos, etc.). Esta información podria recopilarse tanto de forma públicamente accesible (cabeceras o respuestas a errores) como internamente (a partir de la definición de loas distintos assets).
-
-
-
-```{r conclusion, echo=FALSE}
-
-
-```
+También recomendariamos hacer enrichment con qué destinos son los que reciben mas ataques (identificando OSs, versiones de framework o de servicios expuestos, etc.). Con esta información no es descabellado pensar que se podrían determinar qué assets serán atacados en un futuro con mas probabilidad, pudiendo proteger estos elementos de forma mas intensa, o incluyendo honey pots; es decir, utilizando utilizando herramientas de Defensa Activa, tal y como recomienda el framework SHIELD de MITRE.
